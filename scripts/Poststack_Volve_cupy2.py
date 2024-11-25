@@ -3,11 +3,10 @@ Poststack inversion of 3D Volve dataset distributed over ilines (modelling is pe
 is run on CPU)
 
 NOTE: currently works only with same number of inlines per rank
-
-Run as: export OMP_NUM_THREADS=4; export MKL_NUM_THREADS=4; export NUMBA_NUM_THREADS=4; mpiexec -n 4 python Poststack_Volve.py
 """
 
 import os
+import sys
 import numpy as np
 import cupy as cp
 import pylops_mpi
@@ -23,7 +22,7 @@ from scipy.interpolate import RegularGridInterpolator
 from pylops_mpi.DistributedArray import local_split, Partition
 from pylops.basicoperators import Transpose, ToCupy, BlockDiag
 from pylops.avo.poststack import PoststackLinearModelling
-from visual import explode_volume
+from plotting import explode_volume
 
 plt.close("all")
 
@@ -38,9 +37,13 @@ def run():
     
     if rank == 0:
         print(f'Distributed Poststack inversion of 3D Volve data ({size} ranks)')
-
+    sys.stdout.flush()
+    time.sleep(1)
+    print(f'Rank {rank}: using {cp.cuda.runtime.getDeviceProperties(rank)["name"]} with {cp.get_default_memory_pool().get_limit()} GB of memory')
+    sys.stdout.flush()
+    
     # Create folder to save figures
-    figdir = 'Figs'
+    figdir = '../figs/MultiGPU2/'
     if rank == 0:
         if not os.path.exists(figdir):
             os.makedirs(figdir)
@@ -51,22 +54,23 @@ def run():
 
     # Time axis
     itmin = 0 # index of first time/depth sample in data used in inversion
-    itmax = 1000 # index of last time/depth sample in data used in inversion
+    itmax = 800 # index of last time/depth sample in data used in inversion
 
     # Wavelet estimation
     nt_wav = 21 # number of samples of statistical wavelet
     nfft = 512 # number of samples of FFT
 
-    # Inversion parameters
-    niter_sr = 20 # number of iterations of lsqr
-    epsR_sr = 1e-1 # spatial regularization
+    # Spatially simultaneous
+    niter_sr = 10 # number of iterations of lsqr
+    epsI_sr = 1e-4 # damping
+    epsR_sr = 0.1 # spatial regularization
 
     ##################
     # Data preparation
     ##################
 
     # Load data 
-    segyfile = '../../data/seismicinversion/ST10010ZC11_PZ_PSDM_KIRCH_FULL_D.MIG_FIN.POST_STACK.3D.JS-017536.segy'
+    segyfile = '../data/ST10010ZC11_PZ_PSDM_KIRCH_FULL_D.MIG_FIN.POST_STACK.3D.JS-017536.segy'
     f = segyio.open(segyfile, ignore_geometry=True)
 
     traces = segyio.collect(f.trace)[:]
@@ -133,7 +137,7 @@ def run():
     d = d[ilin_rank:ilend_rank]
 
     # Load velocity model
-    segyfilev = '../../data/seismicinversion/ST10010ZC11-MIG-VEL.MIG_VEL.VELOCITY.3D.JS-017527.segy'
+    segyfilev = '../data/ST10010ZC11-MIG-VEL.MIG_VEL.VELOCITY.3D.JS-017527.segy'
     fv = segyio.open(segyfilev)
     v = segyio.cube(fv)
 
@@ -204,6 +208,8 @@ def run():
 
     # Created PostStackLinearModelling as VStack of modelling operators acting on a portion of inlines
     nil_pass = nil_rank[0] // 2
+    if rank == 0:
+        print(f'nil_pass: {nil_pass}')
     nil_pass_in = np.arange(0, nil_rank[0], nil_pass)
     nil_pass_end = nil_pass_in + nil_pass
     nil_pass_end[-1] = nil_rank[0]

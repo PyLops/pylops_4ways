@@ -1,12 +1,11 @@
 r"""
-Poststack inversion of 3D Volve dataset distributed over ilines with cupu arrays
+Poststack inversion of 3D Volve dataset distributed over ilines with cupy arrays
 
 NOTE: currently works only with same number of inlines per rank
-
-Run as: export OMP_NUM_THREADS=4; export MKL_NUM_THREADS=4; export NUMBA_NUM_THREADS=4; mpiexec -n 4 python Poststack_Volve.py
 """
 
 import os
+import sys
 import numpy as np
 import cupy as cp
 import pylops_mpi
@@ -22,7 +21,7 @@ from scipy.interpolate import RegularGridInterpolator
 from pylops_mpi.DistributedArray import local_split, Partition
 from pylops.basicoperators import Transpose
 from pylops.avo.poststack import PoststackLinearModelling
-from visual import explode_volume
+from plotting import explode_volume
 
 plt.close("all")
 
@@ -32,14 +31,18 @@ def run():
     rank = MPI.COMM_WORLD.Get_rank()
     size = MPI.COMM_WORLD.Get_size()
     cp.cuda.Device(device=rank).use()
-
+    
     tic = time.perf_counter()  
     
     if rank == 0:
         print(f'Distributed Poststack inversion of 3D Volve data ({size} ranks)')
-
+    sys.stdout.flush()
+    time.sleep(1)
+    print(f'Rank {rank}: using {cp.cuda.runtime.getDeviceProperties(rank)["name"]} with {cp.get_default_memory_pool().get_limit()} GB of memory')
+    sys.stdout.flush()
+    
     # Create folder to save figures
-    figdir = 'Figs'
+    figdir = '../figs/MultiGPU/'
     if rank == 0:
         if not os.path.exists(figdir):
             os.makedirs(figdir)
@@ -50,22 +53,23 @@ def run():
 
     # Time axis
     itmin = 600 # index of first time/depth sample in data used in inversion
-    itmax = 1000 # index of last time/depth sample in data used in inversion
+    itmax = 800 # index of last time/depth sample in data used in inversion
 
     # Wavelet estimation
     nt_wav = 21 # number of samples of statistical wavelet
     nfft = 512 # number of samples of FFT
 
-    # Inversion parameters
-    niter_sr = 20 # number of iterations of lsqr
-    epsR_sr = 1e-1 # spatial regularization
+    # Spatially simultaneous
+    niter_sr = 10 # number of iterations of lsqr
+    epsI_sr = 1e-4 # damping
+    epsR_sr = 0.1 # spatial regularization
 
     ##################
     # Data preparation
     ##################
 
     # Load data 
-    segyfile = '../../data/seismicinversion/ST10010ZC11_PZ_PSDM_KIRCH_FULL_D.MIG_FIN.POST_STACK.3D.JS-017536.segy'
+    segyfile = '../data/ST10010ZC11_PZ_PSDM_KIRCH_FULL_D.MIG_FIN.POST_STACK.3D.JS-017536.segy'
     f = segyio.open(segyfile, ignore_geometry=True)
 
     traces = segyio.collect(f.trace)[:]
@@ -132,7 +136,7 @@ def run():
     d = d[ilin_rank:ilend_rank]
 
     # Load velocity model
-    segyfilev = '../../data/seismicinversion/ST10010ZC11-MIG-VEL.MIG_VEL.VELOCITY.3D.JS-017527.segy'
+    segyfilev = '../data/ST10010ZC11-MIG-VEL.MIG_VEL.VELOCITY.3D.JS-017527.segy'
     fv = segyio.open(segyfilev)
     v = segyio.cube(fv)
 
@@ -207,6 +211,9 @@ def run():
     Top = Transpose((nil_rank[0], nxl, nt), (2, 0, 1), dtype=np.float32)
     BDiag = pylops_mpi.basicoperators.MPIBlockDiag(ops=[Top.H @ PPop @ Top, ])
 
+    # Inversion
+    aiinvunreg_dist = pylops_mpi.optimization.basic.cgls(BDiag, d_dist, x0=m0_dist, niter=niter_sr, show=True)[0]
+    
     # Regularized inversion with regularized equations
     LapOp = pylops_mpi.MPILaplacian(dims=(nil, nxl, nt), axes=(0, 1, 2), weights=(1, 1, 1),
                                     sampling=(1, 1, 1), dtype=BDiag.dtype)
@@ -223,22 +230,33 @@ def run():
                                                     show=True)[0]
 
     # Retrieve entire models in rank0 and do postprocessing
-    ai0 = cp.asnumpy(m0_dist.asarray().reshape((nil, nxl, nt)))
-    aiinv = cp.asnumpy(aiinv_dist.asarray().reshape((nil, nxl, nt)))
+    ai0 = np.exp(cp.asnumpy(m0_dist.asarray().reshape((nil, nxl, nt))))
+    aiinvunreg = np.exp(cp.asnumpy(aiinvunreg_dist.asarray().reshape((nil, nxl, nt))))
+    aiinv = np.exp(cp.asnumpy(aiinv_dist.asarray().reshape((nil, nxl, nt))))
 
     if rank == 0:
-
-        # Display background and inverted model
-        explode_volume(np.exp(ai0).transpose(2, 1, 0),
+       
+        # Display background and inverted models
+        explode_volume(ai0.transpose(2, 1, 0),
                        cmap='gist_rainbow', clipval=(1500, 18000),
                        figsize=(15, 10))
         plt.savefig(os.path.join(figdir, 'BackAI.png'), dpi=300)
-        explode_volume(np.exp(aiinv).transpose(2, 1, 0),
-                       cmap='gist_rainbow', clipval=(1500, 18000),
-                       figsize=(15, 10))
+        explode_volume(aiinvunreg.transpose(2, 1, 0),
+                       cmap='terrain', clipval=(ai0[nil//2, nxl//2].min(), 1.5*ai0[nil//2, nxl//2].max()),
+                       tlabel='t [ms]', ylabel='IL', xlabel='XL', 
+                       ylim=(ilines[0], ilines[-1]), xlim=(xlines[0], xlines[-1]), 
+                       tlim=(t[0], t[-1]), title='LS-unreg Inverted AI', figsize=(15, 9))
+        plt.savefig(os.path.join(figdir, 'InvunregAI.png'), dpi=300)
+
+        explode_volume(aiinv.transpose(2, 1, 0),
+                       cmap='terrain', clipval=(ai0[nil//2, nxl//2].min(), 1.5*ai0[nil//2, nxl//2].max()),
+                       tlabel='t [ms]', ylabel='IL', xlabel='XL', 
+                       ylim=(ilines[0], ilines[-1]), xlim=(xlines[0], xlines[-1]), 
+                       tlim=(t[0], t[-1]), title='LS Inverted AI', figsize=(15, 9))
         plt.savefig(os.path.join(figdir, 'InvAI.png'), dpi=300)
 
         print('Done')
-            
+
+
 if __name__ == '__main__':
     run()

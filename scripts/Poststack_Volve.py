@@ -2,8 +2,6 @@ r"""
 Poststack inversion of 3D Volve dataset distributed over ilines. 
 
 NOTE: currently works only with same number of inlines per rank
-
-Run as: export OMP_NUM_THREADS=4; export MKL_NUM_THREADS=4; export NUMBA_NUM_THREADS=4; mpiexec -n 4 python Poststack_Volve.py
 """
 
 import os
@@ -202,7 +200,6 @@ def run():
 
     # Created PostStackLinearModelling
     wav_amp = 1e1 # guessed as we have estimated the wavelet statistically
-
     PPop = PoststackLinearModelling(wav_amp * wav_est, nt0=nt, spatdims=(nil_rank[0], nxl))
     Top = Transpose((nil_rank[0], nxl, nt), (2, 0, 1))
     BDiag = pylops_mpi.basicoperators.MPIBlockDiag(ops=[Top.H @ PPop @ Top, ])
@@ -226,34 +223,34 @@ def run():
     
     # Retrive entire models in rank0 and do postprocessing
     d = d_dist.asarray().reshape((nil, nxl, nt))
-    ai0 = m0_dist.asarray().reshape((nil, nxl, nt))
-    aiinvunreg = aiinvunreg_dist.asarray().reshape((nil, nxl, nt))
-    aiinv = aiinv_dist.asarray().reshape((nil, nxl, nt))
+    ai0 = np.exp(m0_dist.asarray().reshape((nil, nxl, nt)))
+    aiinvunreg = np.exp(aiinvunreg_dist.asarray().reshape((nil, nxl, nt)))
+    aiinv = np.exp(aiinv_dist.asarray().reshape((nil, nxl, nt)))
 
     
     if rank == 0:
        
         # Display background and inverted models
-        explode_volume(np.exp(ai0).transpose(2, 1, 0),
+        explode_volume(ai0.transpose(2, 1, 0),
                        cmap='gist_rainbow', clipval=(1500, 18000),
                        figsize=(15, 10))
         plt.savefig(os.path.join(figdir, 'BackAI.png'), dpi=300)
-        explode_volume(np.exp(aiinvunreg).transpose(2, 1, 0),
-                       cmap='terrain', clipval=(aiinterp[nil//2, nxl//2].min(), 1.5*aiinterp[nil//2, nxl//2].max()),
+        explode_volume(aiinvunreg.transpose(2, 1, 0),
+                       cmap='terrain', clipval=(ai0[nil//2, nxl//2].min(), 1.5*ai0[nil//2, nxl//2].max()),
                        tlabel='t [ms]', ylabel='IL', xlabel='XL', 
                        ylim=(ilines[0], ilines[-1]), xlim=(xlines[0], xlines[-1]), 
                        tlim=(t[0], t[-1]), title='LS-unreg Inverted AI', figsize=(15, 9))
         plt.savefig(os.path.join(figdir, 'InvunregAI.png'), dpi=300)
 
-        explode_volume(np.exp(aiinv).transpose(2, 1, 0),
-                       cmap='terrain', clipval=(aiinterp[nil//2, nxl//2].min(), 1.5*aiinterp[nil//2, nxl//2].max()),
+        explode_volume(aiinv.transpose(2, 1, 0),
+                       cmap='terrain', clipval=(ai0[nil//2, nxl//2].min(), 1.5*ai0[nil//2, nxl//2].max()),
                        tlabel='t [ms]', ylabel='IL', xlabel='XL', 
                        ylim=(ilines[0], ilines[-1]), xlim=(xlines[0], xlines[-1]), 
                        tlim=(t[0], t[-1]), title='LS Inverted AI', figsize=(15, 9))
         plt.savefig(os.path.join(figdir, 'InvAI.png'), dpi=300)
 
-
         print('Done')
-            
+
+
 if __name__ == '__main__':
     run()
