@@ -116,6 +116,8 @@ def run():
     d = d[:-1]
     ilines = ilines[:-1]
     nil, nxl, nt = len(ilines), len(xlines), len(t)
+    if rank == 0:
+        print(f'Data size: {d.shape}')
 
     # Display data
     if rank == 0:
@@ -134,7 +136,7 @@ def run():
     
     # Extract part of data of interest
     d = d[ilin_rank:ilend_rank]
-
+    
     # Load velocity model
     segyfilev = '../data/ST10010ZC11-MIG-VEL.MIG_VEL.VELOCITY.3D.JS-017527.segy'
     fv = segyio.open(segyfilev)

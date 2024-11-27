@@ -228,23 +228,50 @@ def run():
     BDiag = pylops_mpi.basicoperators.MPIBlockDiag(ops=[BDiags, ])
 
     # Inversion
-    aiinv_dist = pylops_mpi.optimization.basic.cgls(BDiag, d_dist, x0=m0_dist, niter=niter_sr, show=True)[0]
+    aiinvunreg_dist = pylops_mpi.optimization.basic.cgls(BDiag, d_dist, x0=m0_dist, niter=niter_sr, show=True)[0]
 
+    # Regularized inversion with regularized equations
+    LapOp = pylops_mpi.MPILaplacian(dims=(nil, nxl, nt), axes=(0, 1, 2), weights=(1, 1, 1),
+                                    sampling=(1, 1, 1), dtype=BDiag.dtype)
+
+    StackOp = pylops_mpi.MPIStackedVStack([BDiag, np.sqrt(epsR_sr) * LapOp])
+    d0_dist = pylops_mpi.DistributedArray(global_shape=nil * nxl * nt)
+    d0_dist[:] = 0.
+    dstack_dist = pylops_mpi.StackedDistributedArray([d_dist, d0_dist])
+
+    aiinv_dist = pylops_mpi.optimization.basic.cgls(StackOp, dstack_dist,
+                                                    x0=m0_dist, 
+                                                    niter=niter_sr, 
+                                                    show=True)[0]
+
+    
     # Retrieve entire models in rank0 and do postprocessing
     ai0 = m0_dist.asarray().reshape((nil, nxl, nt))
+    aiinvunreg = aiinvunreg_dist.asarray().reshape((nil, nxl, nt))
     aiinv = aiinv_dist.asarray().reshape((nil, nxl, nt))
 
     if rank == 0:
-
-        # Display background and inverted model
-        explode_volume(np.exp(ai0).transpose(2, 1, 0),
+        
+        # Display background and inverted models
+        explode_volume(ai0.transpose(2, 1, 0),
                        cmap='gist_rainbow', clipval=(1500, 18000),
                        figsize=(15, 10))
         plt.savefig(os.path.join(figdir, 'BackAI.png'), dpi=300)
-        explode_volume(np.exp(aiinv).transpose(2, 1, 0),
-                       cmap='gist_rainbow', clipval=(1500, 18000),
-                       figsize=(15, 10))
+        explode_volume(aiinvunreg.transpose(2, 1, 0),
+                       cmap='terrain', clipval=(ai0[nil//2, nxl//2].min(), 1.5*ai0[nil//2, nxl//2].max()),
+                       tlabel='t [ms]', ylabel='IL', xlabel='XL', 
+                       ylim=(ilines[0], ilines[-1]), xlim=(xlines[0], xlines[-1]), 
+                       tlim=(t[0], t[-1]), title='LS-unreg Inverted AI', figsize=(15, 9))
+        plt.savefig(os.path.join(figdir, 'InvunregAI.png'), dpi=300)
+
+        explode_volume(aiinv.transpose(2, 1, 0),
+                       cmap='terrain', clipval=(ai0[nil//2, nxl//2].min(), 1.5*ai0[nil//2, nxl//2].max()),
+                       tlabel='t [ms]', ylabel='IL', xlabel='XL', 
+                       ylim=(ilines[0], ilines[-1]), xlim=(xlines[0], xlines[-1]), 
+                       tlim=(t[0], t[-1]), title='LS Inverted AI', figsize=(15, 9))
         plt.savefig(os.path.join(figdir, 'InvAI.png'), dpi=300)
+
+        np.savez(os.path.join(figdir, 'Results'), d=d, aiinvunreg=aiinvunreg, aiinv=aiinv)
 
         print('Done')
             
