@@ -223,7 +223,6 @@ def run():
         BDiag = TCop1.H @ VStack([Top.H @ PPop @ Top, np.sqrt(epsR_sr) * LapOp]) @ TCop
         BDiags.append(BDiag)
         ddiags.append(np.hstack([d[nil_i:nil_e].flatten().astype(np.float32), np.zeros_like(m0[nil_i:nil_e].flatten()).astype(np.float32)]))
-        print('ddiags[-1].shape', ddiags[-1].shape)
     BDiags = BlockDiag(BDiags, forceflat=True)
     BDiag = pylops_mpi.basicoperators.MPIBlockDiag(ops=[BDiags, ])
 
@@ -231,7 +230,6 @@ def run():
     dstack_dist = pylops_mpi.DistributedArray(global_shape=2 * nil * nxl * nt,
                                               local_shapes=[(2 * nil_r * nxl * nt,) for nil_r in nil_ranks], 
                                               dtype=np.float32)
-    print('np.concatenate(ddiags)',  np.concatenate(ddiags).shape)
     dstack_dist[:] = np.concatenate(ddiags)
        
     aiinv_dist = pylops_mpi.optimization.basic.cgls(BDiag, dstack_dist,
