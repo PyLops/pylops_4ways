@@ -44,7 +44,7 @@ def run():
     sys.stdout.flush()
     
     # Create folder to save figures
-    figdir = '../figs/MultiGPU2/'
+    figdir = '../figs/MultiGPU3/'
     if rank == 0:
         if not os.path.exists(figdir):
             os.makedirs(figdir)
@@ -194,12 +194,6 @@ def run():
     else:
         wav_est = np.empty(nt_wav * 2 - 1)
     comm.Bcast(wav_est, root=0)
-
-    # Create distributed data
-    d_dist = pylops_mpi.DistributedArray(global_shape=nil * nxl * nt,
-                                         local_shapes=[(nil_r * nxl * nt,) for nil_r in nil_ranks], 
-                                         dtype=np.float32)
-    d_dist[:] = d.flatten().astype(np.float32)
     
     # Create distributed background model
     m0_dist = pylops_mpi.DistributedArray(global_shape=nil * nxl * nt,
@@ -208,7 +202,7 @@ def run():
     m0_dist[:] = m0.flatten().astype(np.float32)
 
     # Created PostStackLinearModelling as VStack of modelling operators acting on a portion of inlines
-    nil_pass = nil_rank[0] // 4
+    nil_pass = nil_rank[0] // 2
     if rank == 0:
         print(f'nil_pass: {nil_pass}')
     nil_pass_in = np.arange(0, nil_rank[0], nil_pass)
@@ -217,6 +211,7 @@ def run():
     print(f'Rank: {rank}, nil_rank: {nil_rank[0]}, nil_pass_in: {nil_pass_in}, nil_pass_end: {nil_pass_in}')
 
     BDiags = []
+    ddiags = []
     for nil_i, nil_e in zip(nil_pass_in, nil_pass_end):
         PPop = PoststackLinearModelling(1e1 * cp.asarray(wav_est.astype(np.float32)), nt0=nt,
                                         spatdims=(nil_e - nil_i, nxl))
@@ -225,11 +220,10 @@ def run():
         TCop1 = ToCupy(2 * Top.shape[0], dtype=np.float32)
         LapOp = Laplacian(dims=(nil_e - nil_i, nxl, nt), axes=(0, 1, 2), weights=(1, 1, 1),
                           sampling=(1, 1, 1), dtype=np.float32)
-        BDiag = TCop1.H @ VStack([ Top.H @ PPop @ Top, np.sqrt(epsR_sr) * LapOp
-                                 \
-                                 
-                                 ]) @ TCop
+        BDiag = TCop1.H @ VStack([Top.H @ PPop @ Top, np.sqrt(epsR_sr) * LapOp]) @ TCop
         BDiags.append(BDiag)
+        ddiags.append(np.hstack([d[nil_i:nil_e].flatten().astype(np.float32), np.zeros_like(m0[nil_i:nil_e].flatten()).astype(np.float32)]))
+        print('ddiags[-1].shape', ddiags[-1].shape)
     BDiags = BlockDiag(BDiags, forceflat=True)
     BDiag = pylops_mpi.basicoperators.MPIBlockDiag(ops=[BDiags, ])
 
@@ -237,7 +231,8 @@ def run():
     dstack_dist = pylops_mpi.DistributedArray(global_shape=2 * nil * nxl * nt,
                                               local_shapes=[(2 * nil_r * nxl * nt,) for nil_r in nil_ranks], 
                                               dtype=np.float32)
-    dstack_dist[:] = np.hstack([d.flatten().astype(np.float32), np.zeros_like(m0.flatten(), type=np.float32)])
+    print('np.concatenate(ddiags)',  np.concatenate(ddiags).shape)
+    dstack_dist[:] = np.concatenate(ddiags)
        
     aiinv_dist = pylops_mpi.optimization.basic.cgls(BDiag, dstack_dist,
                                                     x0=m0_dist, 
