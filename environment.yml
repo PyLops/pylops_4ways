@@ -1,0 +1,23 @@
+name: pylops_4ways
+channels:
+  - rapidsai
+  - conda-forge
+  - nvidia
+  - numba
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - numpy
+  - scipy>=1.4.0
+  - cupy==13.1.0
+  - cuda-version==11.8
+  - libcublas
+  - numba
+  - icc_rt
+  - matplotlib
+  - mpi4py 
+  - ipython
+  - jupyter
+  - pip:
+    - segyio
